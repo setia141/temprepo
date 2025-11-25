@@ -10,10 +10,10 @@ on:
         description: "Base64 encoded OAS content"
         required: true
       oasFilePath:
-        description: "Path to save OAS (e.g., api/openapi.yaml)"
+        description: "Path where OAS should be saved (ex: api/openapi.yaml)"
         required: true
       prTitle:
-        description: "PR title"
+        description: "Title of the Pull Request"
         required: true
       prAssignee:
         description: "GitHub username to assign PR"
@@ -28,40 +28,42 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set variables
+      - name: Setup Variables
         run: |
           echo "BRANCH=${{ github.event.inputs.branchName }}" >> $GITHUB_ENV
           echo "FILE_PATH=${{ github.event.inputs.oasFilePath }}" >> $GITHUB_ENV
 
-      - name: Create new branch
+      - name: Create New Branch
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git checkout -b "$BRANCH"
 
-      - name: Decode OAS Base64 and save file
+      - name: Decode Base64 OAS File and Save
         run: |
           mkdir -p "$(dirname $FILE_PATH)"
           echo "${{ github.event.inputs.oasBase64 }}" | base64 --decode > "$FILE_PATH"
 
-      - name: Commit & Push changes
+      - name: Commit & Push Changes
         run: |
           git add "$FILE_PATH"
           git commit -m "Automated: Enhanced OAS update"
           git push origin "$BRANCH"
 
       - name: Create Pull Request
-        id: pr
+        id: create_pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ env.BRANCH }}
           title: ${{ github.event.inputs.prTitle }}
-          body: "OAS enhanced automatically via ADK + LLM."
+          body: "This PR contains the enhanced OAS generated automatically."
           assignees: ${{ github.event.inputs.prAssignee }}
 
       - name: Output PR URL
-        run: echo "PR URL: ${{ steps.pr.outputs.pull-request-url }}"
+        id: output_pr
+        env:
+          PR_URL: ${{ steps.create_pr.outputs.pull-request-url }
