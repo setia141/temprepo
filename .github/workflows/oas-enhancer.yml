@@ -1,19 +1,22 @@
-name: OAS Enhancer Automation (Base64)
+name: OAS Enhancer Automation (Cross-Repo)
 
 on:
   workflow_dispatch:
     inputs:
+      targetRepo:
+        description: "Target repo in format owner/repo"
+        required: true
       branchName:
-        description: "Branch name to create"
+        description: "New branch to create in target repo"
         required: true
       oasBase64:
-        description: "Base64 encoded OAS content"
+        description: "Base64 encoded OAS file"
         required: true
       oasFilePath:
-        description: "Path where OAS should be saved (ex: api/openapi.yaml)"
+        description: "Where to save OAS in target repo (ex: api/openapi.yaml)"
         required: true
       prTitle:
-        description: "Title of the Pull Request"
+        description: "PR Title"
         required: true
       prAssignee:
         description: "GitHub username to assign PR"
@@ -28,61 +31,41 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Persist workflow inputs to env (safe)
-        # We write inputs to GITHUB_ENV so run blocks do not contain ${ { } } interpolations
+      - name: Extract Inputs
         run: |
+          echo "TARGET_REPO=${{ github.event.inputs.targetRepo }}" >> $GITHUB_ENV
           echo "BRANCH=${{ github.event.inputs.branchName }}" >> $GITHUB_ENV
           echo "FILE_PATH=${{ github.event.inputs.oasFilePath }}" >> $GITHUB_ENV
-          # Use a multiline env entry for the possibly-large base64 string
+          echo "PR_TITLE=${{ github.event.inputs.prTitle }}" >> $GITHUB_ENV
+          echo "PR_ASSIGNEE=${{ github.event.inputs.prAssignee }}" >> $GITHUB_ENV
           echo "OAS_B64<<EOF" >> $GITHUB_ENV
           echo "${{ github.event.inputs.oasBase64 }}" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
-          echo "PR_TITLE=${{ github.event.inputs.prTitle }}" >> $GITHUB_ENV
-          echo "PR_ASSIGNEE=${{ github.event.inputs.prAssignee }}" >> $GITHUB_ENV
 
-      - name: Create New Branch
+      - name: Clone Target Repo (Repo-B)
         run: |
+          git clone https://x-access-token:${{ secrets.REPO_B_TOKEN }}@github.com/$TARGET_REPO target
+          cd target
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          # If branch exists, fail the checkout create; we deliberately force-create to be explicit
+
+      - name: Create Branch in Repo-B
+        run: |
+          cd target
           git checkout -b "$BRANCH"
 
-      - name: Decode Base64 OAS File and Save
+      - name: Decode OAS Base64 + Save
         run: |
-          # ensure dir exists
+          cd target
           mkdir -p "$(dirname "$FILE_PATH")"
-          # write decoded content
           echo "$OAS_B64" | base64 --decode > "$FILE_PATH"
-          # sanity: show file size
-          echo "Wrote $FILE_PATH ($(wc -c < "$FILE_PATH") bytes)"
 
-      - name: Commit & Push Changes
+      - name: Commit & Push to Repo-B
         run: |
+          cd target
           git add "$FILE_PATH"
-          # If nothing changed, exit gracefully
           if git diff --staged --quiet; then
-            echo "No changes to commit. Exiting."
+            echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Automated: Enhanced OAS update"
-          git push origin "$BRANCH"
-
-      - name: Create Pull Request
-        id: create_pr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ env.BRANCH }}
-          title: ${{ env.PR_TITLE }}
-          body: "This PR contains the enhanced OAS generated automatically."
-          assignees: ${{ env.PR_ASSIGNEE }}
-
-      - name: Output PR URL
-        id: output_pr
-        env:
-          PR_URL: ${{ steps.create_pr.outputs.pull-request-url }}
-        run: |
-          echo "PR URL: $PR_URL"
+          git commit -m "Automated OAS update"
