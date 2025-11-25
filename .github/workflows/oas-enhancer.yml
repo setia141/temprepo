@@ -31,25 +31,42 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Variables
+      - name: Persist workflow inputs to env (safe)
+        # We write inputs to GITHUB_ENV so run blocks do not contain ${ { } } interpolations
         run: |
           echo "BRANCH=${{ github.event.inputs.branchName }}" >> $GITHUB_ENV
           echo "FILE_PATH=${{ github.event.inputs.oasFilePath }}" >> $GITHUB_ENV
+          # Use a multiline env entry for the possibly-large base64 string
+          echo "OAS_B64<<EOF" >> $GITHUB_ENV
+          echo "${{ github.event.inputs.oasBase64 }}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "PR_TITLE=${{ github.event.inputs.prTitle }}" >> $GITHUB_ENV
+          echo "PR_ASSIGNEE=${{ github.event.inputs.prAssignee }}" >> $GITHUB_ENV
 
       - name: Create New Branch
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+          # If branch exists, fail the checkout create; we deliberately force-create to be explicit
           git checkout -b "$BRANCH"
 
       - name: Decode Base64 OAS File and Save
         run: |
-          mkdir -p "$(dirname $FILE_PATH)"
-          echo "${{ github.event.inputs.oasBase64 }}" | base64 --decode > "$FILE_PATH"
+          # ensure dir exists
+          mkdir -p "$(dirname "$FILE_PATH")"
+          # write decoded content
+          echo "$OAS_B64" | base64 --decode > "$FILE_PATH"
+          # sanity: show file size
+          echo "Wrote $FILE_PATH ($(wc -c < "$FILE_PATH") bytes)"
 
       - name: Commit & Push Changes
         run: |
           git add "$FILE_PATH"
+          # If nothing changed, exit gracefully
+          if git diff --staged --quiet; then
+            echo "No changes to commit. Exiting."
+            exit 0
+          fi
           git commit -m "Automated: Enhanced OAS update"
           git push origin "$BRANCH"
 
@@ -59,11 +76,13 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ env.BRANCH }}
-          title: ${{ github.event.inputs.prTitle }}
+          title: ${{ env.PR_TITLE }}
           body: "This PR contains the enhanced OAS generated automatically."
-          assignees: ${{ github.event.inputs.prAssignee }}
+          assignees: ${{ env.PR_ASSIGNEE }}
 
       - name: Output PR URL
         id: output_pr
         env:
-          PR_URL: ${{ steps.create_pr.outputs.pull-request-url }
+          PR_URL: ${{ steps.create_pr.outputs.pull-request-url }}
+        run: |
+          echo "PR URL: $PR_URL"
