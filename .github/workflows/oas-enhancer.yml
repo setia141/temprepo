@@ -1,0 +1,67 @@
+name: OAS Enhancer Automation (Base64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branchName:
+        description: "Branch name to create"
+        required: true
+      oasBase64:
+        description: "Base64 encoded OAS content"
+        required: true
+      oasFilePath:
+        description: "Path to save OAS (e.g., api/openapi.yaml)"
+        required: true
+      prTitle:
+        description: "PR title"
+        required: true
+      prAssignee:
+        description: "GitHub username to assign PR"
+        required: true
+
+jobs:
+  update-oas:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set variables
+        run: |
+          echo "BRANCH=${{ github.event.inputs.branchName }}" >> $GITHUB_ENV
+          echo "FILE_PATH=${{ github.event.inputs.oasFilePath }}" >> $GITHUB_ENV
+
+      - name: Create new branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout -b "$BRANCH"
+
+      - name: Decode OAS Base64 and save file
+        run: |
+          mkdir -p "$(dirname $FILE_PATH)"
+          echo "${{ github.event.inputs.oasBase64 }}" | base64 --decode > "$FILE_PATH"
+
+      - name: Commit & Push changes
+        run: |
+          git add "$FILE_PATH"
+          git commit -m "Automated: Enhanced OAS update"
+          git push origin "$BRANCH"
+
+      - name: Create Pull Request
+        id: pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.BRANCH }}
+          title: ${{ github.event.inputs.prTitle }}
+          body: "OAS enhanced automatically via ADK + LLM."
+          assignees: ${{ github.event.inputs.prAssignee }}
+
+      - name: Output PR URL
+        run: echo "PR URL: ${{ steps.pr.outputs.pull-request-url }}"
