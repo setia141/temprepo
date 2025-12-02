@@ -1,71 +1,99 @@
-name: OAS Enhancer Automation (Cross-Repo)
+name: Sync OAS to actual_repo
 
 on:
-  workflow_dispatch:
-    inputs:
-      targetRepo:
-        description: "Target repo in format owner/repo"
-        required: true
-      branchName:
-        description: "New branch to create in target repo"
-        required: true
-      oasBase64:
-        description: "Base64 encoded OAS file"
-        required: true
-      oasFilePath:
-        description: "Where to save OAS in target repo (ex: api/openapi.yaml)"
-        required: true
-      prTitle:
-        description: "PR Title"
-        required: true
-      prAssignee:
-        description: "GitHub username to assign PR"
-        required: true
+  push:
+    paths:
+      - "generated/**/spec.yaml"
 
 jobs:
-  update-oas:
+  sync:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
-      pull-requests: write
-
     steps:
-      - name: Extract Inputs
-        run: |
-          echo "TARGET_REPO=${{ github.event.inputs.targetRepo }}" >> $GITHUB_ENV
-          echo "BRANCH=${{ github.event.inputs.branchName }}" >> $GITHUB_ENV
-          echo "FILE_PATH=${{ github.event.inputs.oasFilePath }}" >> $GITHUB_ENV
-          echo "PR_TITLE=${{ github.event.inputs.prTitle }}" >> $GITHUB_ENV
-          echo "PR_ASSIGNEE=${{ github.event.inputs.prAssignee }}" >> $GITHUB_ENV
-          echo "OAS_B64<<EOF" >> $GITHUB_ENV
-          echo "${{ github.event.inputs.oasBase64 }}" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+      - name: Checkout Repo-A (temprepo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
-      - name: Clone Target Repo (Repo-B)
+      - name: Detect changed OAS file(s)
+        id: detect
         run: |
-          git clone https://x-access-token:${{ secrets.REPO_B_TOKEN }}@github.com/$TARGET_REPO target
-          cd target
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-      - name: Create Branch in Repo-B
-        run: |
-          cd target
-          git checkout -b "$BRANCH"
-
-      - name: Decode OAS Base64 + Save
-        run: |
-          cd target
-          mkdir -p "$(dirname "$FILE_PATH")"
-          echo "$OAS_B64" | base64 --decode > "$FILE_PATH"
-
-      - name: Commit & Push to Repo-B
-        run: |
-          cd target
-          git add "$FILE_PATH"
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
-            exit 0
+          FILES=$(git diff --name-only HEAD~1 HEAD | grep "generated/.*/spec.yaml" || true)
+          if [ -z "$FILES" ]; then
+            echo "none=true" >> $GITHUB_OUTPUT
+          else
+            echo "none=false" >> $GITHUB_OUTPUT
+            echo "FILES<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           fi
-          git commit -m "Automated OAS update"
+
+      - name: Stop if nothing changed
+        if: steps.detect.outputs.none == 'true'
+        run: echo "No OAS changes detected."
+
+      - name: Setup GitHub CLI
+        if: steps.detect.outputs.none == 'false'
+        run: |
+          echo "${{ secrets.REPO_B_TOKEN }}" | gh auth login --with-token
+
+      - name: Process each changed file
+        if: steps.detect.outputs.none == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.REPO_B_TOKEN }}
+        run: |
+          set -e
+
+          for SRC in ${{ steps.detect.outputs.FILES }}; do
+            # Example: generated/acme/service-a/foo/bar/spec.yaml
+            DEST="${SRC#generated/}"
+
+            BRANCH="oas-sync-$(date +%s)"
+
+            echo "=== Syncing $SRC to actual_repo:$DEST ==="
+
+            # Clone Repo-B
+            git clone "https://x-access-token:${GH_TOKEN}@github.com/setia141/actual_repo.git" repo-b
+            cd repo-b
+
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+
+            # Checkout from NPE or create
+            if git ls-remote --exit-code --heads origin NPE >/dev/null 2>&1; then
+              git checkout -b "$BRANCH" origin/NPE
+            else
+              git checkout -b "$BRANCH"
+            fi
+
+            cd ..
+
+            # Ensure folder exists & copy file
+            mkdir -p "repo-b/$(dirname "$DEST")"
+            cp "$SRC" "repo-b/$DEST"
+
+            cd repo-b
+            git add "$DEST"
+
+            # Skip if no real change
+            if git diff --staged --quiet; then
+              echo "No actual change for $DEST"
+              cd ..
+              rm -rf repo-b
+              continue
+            fi
+
+            git commit -m "Auto-sync OAS update for $DEST"
+            git push -u origin "$BRANCH"
+
+            # Create PR
+            gh pr create \
+              --base "NPE" \
+              --head "$BRANCH" \
+              --title "Auto-sync OAS for $DEST" \
+              --body "Automated OAS update from temprepo" || true
+
+            cd ..
+            rm -rf repo-b
+
+          done
