@@ -3,7 +3,7 @@ name: Sync OAS to actual_repo
 on:
   push:
     paths:
-      - "generated/**/spec.yaml"
+      - "generated/**/*.yaml"
 
 jobs:
   sync:
