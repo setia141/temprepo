@@ -32,21 +32,17 @@ jobs:
         if: steps.detect.outputs.none == 'true'
         run: echo "No YAML changes detected."
 
-      - name: Install GH CLI
-        if: steps.detect.outputs.none == 'false'
-        run: |
-          echo "${{ secrets.REPO_B_TOKEN }}" | gh auth login --with-token
-
       - name: Process changed files
         if: steps.detect.outputs.none == 'false'
         env:
           GH_TOKEN: ${{ secrets.REPO_B_TOKEN }}
         run: |
           set -e
+          BASE_BRANCH="main"  # Change to NPE if needed
 
           for SRC in ${{ steps.detect.outputs.FILES }}; do
-            # Strip "generated/"
-            DEST="${SRC#generated/}"
+            # Remove 'generated/<owner>/<repo>/' prefix to get relative path in Repo-B
+            DEST=$(echo "$SRC" | sed -E 's|generated/[^/]+/[^/]+/||')
 
             BRANCH="sync-$(date +%s)"
 
@@ -59,24 +55,20 @@ jobs:
             git config user.name "github-actions"
             git config user.email "github-actions@github.com"
 
-            # Checkout from NPE or create
-            if git ls-remote --exit-code --heads origin NPE >/dev/null 2>&1; then
-              git checkout -b "$BRANCH" origin/NPE
-            else
-              git checkout -b "$BRANCH"
-            fi
+            # Checkout new branch from BASE_BRANCH
+            git fetch origin $BASE_BRANCH
+            git checkout -b "$BRANCH" origin/$BASE_BRANCH
 
             cd ..
 
-            # Ensure folder exists, copy file
+            # Ensure folder exists & copy file
             mkdir -p "repo-b/$(dirname "$DEST")"
             cp "$SRC" "repo-b/$DEST"
 
             cd repo-b
-
             git add "$DEST"
 
-            # Skip if no meaningful diff
+            # Skip if no changes
             if git diff --staged --quiet; then
               echo "No actual change for $DEST"
               cd ..
@@ -87,9 +79,9 @@ jobs:
             git commit -m "Auto-sync $DEST"
             git push -u origin "$BRANCH"
 
-            # Create PR
+            # Create PR targeting main
             gh pr create \
-              --base "NPE" \
+              --base "$BASE_BRANCH" \
               --head "$BRANCH" \
               --title "Auto-sync YAML update: $DEST" \
               --body "Automated sync from temprepo" || true
