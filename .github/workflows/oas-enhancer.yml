@@ -1,4 +1,4 @@
-name: Sync OAS to actual_repo
+name: Sync YAML files to actual_repo
 
 on:
   push:
@@ -10,15 +10,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo-A (temprepo)
+      - name: Checkout Repo-A
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Detect changed OAS file(s)
+      - name: Detect changed YAML files
         id: detect
         run: |
-          FILES=$(git diff --name-only HEAD~1 HEAD | grep "generated/.*/spec.yaml" || true)
+          FILES=$(git diff --name-only HEAD~1 HEAD | grep "^generated/.*\.yaml$" || true)
           if [ -z "$FILES" ]; then
             echo "none=true" >> $GITHUB_OUTPUT
           else
@@ -30,14 +30,14 @@ jobs:
 
       - name: Stop if nothing changed
         if: steps.detect.outputs.none == 'true'
-        run: echo "No OAS changes detected."
+        run: echo "No YAML changes detected."
 
-      - name: Setup GitHub CLI
+      - name: Install GH CLI
         if: steps.detect.outputs.none == 'false'
         run: |
           echo "${{ secrets.REPO_B_TOKEN }}" | gh auth login --with-token
 
-      - name: Process each changed file
+      - name: Process changed files
         if: steps.detect.outputs.none == 'false'
         env:
           GH_TOKEN: ${{ secrets.REPO_B_TOKEN }}
@@ -45,12 +45,12 @@ jobs:
           set -e
 
           for SRC in ${{ steps.detect.outputs.FILES }}; do
-            # Example: generated/acme/service-a/foo/bar/spec.yaml
+            # Strip "generated/"
             DEST="${SRC#generated/}"
 
-            BRANCH="oas-sync-$(date +%s)"
+            BRANCH="sync-$(date +%s)"
 
-            echo "=== Syncing $SRC to actual_repo:$DEST ==="
+            echo "=== Syncing $SRC -> actual_repo:$DEST ==="
 
             # Clone Repo-B
             git clone "https://x-access-token:${GH_TOKEN}@github.com/setia141/actual_repo.git" repo-b
@@ -68,14 +68,15 @@ jobs:
 
             cd ..
 
-            # Ensure folder exists & copy file
+            # Ensure folder exists, copy file
             mkdir -p "repo-b/$(dirname "$DEST")"
             cp "$SRC" "repo-b/$DEST"
 
             cd repo-b
+
             git add "$DEST"
 
-            # Skip if no real change
+            # Skip if no meaningful diff
             if git diff --staged --quiet; then
               echo "No actual change for $DEST"
               cd ..
@@ -83,17 +84,16 @@ jobs:
               continue
             fi
 
-            git commit -m "Auto-sync OAS update for $DEST"
+            git commit -m "Auto-sync $DEST"
             git push -u origin "$BRANCH"
 
             # Create PR
             gh pr create \
               --base "NPE" \
               --head "$BRANCH" \
-              --title "Auto-sync OAS for $DEST" \
-              --body "Automated OAS update from temprepo" || true
+              --title "Auto-sync YAML update: $DEST" \
+              --body "Automated sync from temprepo" || true
 
             cd ..
             rm -rf repo-b
-
           done
